@@ -1,0 +1,10 @@
+node_modules/
+finanzas.db
+finanzas.db-journal
+finanzas.db-wal
+finanzas.db-shm
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db

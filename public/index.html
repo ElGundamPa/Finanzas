@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f1117" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Mis Finanzas</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    * { -webkit-tap-highlight-color: transparent; }
+    body { font-family: 'Inter', sans-serif; background: #0a0c10; overscroll-behavior: none; }
+    .fade-in { animation: fadeIn 0.35s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .alert-pulse { animation: pulse 2.5s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 2px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    select { -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b7280' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
+    .toggle-track { transition: background-color 0.2s; }
+    .toggle-dot { transition: transform 0.2s; }
+  </style>
+</head>
+<body class="min-h-screen text-gray-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+    const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    const MESES_CORTO = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    const CATEGORIAS = ['Mercado','Restaurante','Transporte','Entretenimiento','Ropa','Salud','Educación','Belleza','Mecato','Otro'];
+    const CAT_COLORS = ['#3b82f6','#f59e0b','#10b981','#8b5cf6','#ec4899','#ef4444','#06b6d4','#f97316','#a855f7','#6b7280'];
+    const CAT_ICONS = ['🛒','🍽️','🚗','🎬','👕','💊','📚','💇','🍫','📦'];
+    const FIJOS_LABELS = { arriendo:'Arriendo', servicios:'Servicios', internet:'Internet', transporte:'Transporte', seguros:'Seguros', cuotas:'Cuotas crédito' };
+    const FIJOS_ICONS = { arriendo:'🏠', servicios:'💡', internet:'📡', transporte:'🚌', seguros:'🛡️', cuotas:'💳' };
+
+    function formatCOP(n) {
+      if (n == null || isNaN(n)) return '$0';
+      return '$' + Math.round(n).toLocaleString('es-CO');
+    }
+    function parseMonto(str) {
+      return parseInt(String(str).replace(/[^0-9]/g, ''), 10) || 0;
+    }
+    function parseNatural(text) {
+      const lower = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const numMatch = lower.match(/[\d.,]+/);
+      const monto = numMatch ? parseMonto(numMatch[0].replace(/\./g, '').replace(',', '')) : 0;
+      const cleaned = lower.replace(/[\d.,]+/g, '').replace(/\s+/g, ' ').trim();
+      const catMap = {
+        mercado:'Mercado',supermercado:'Mercado',compras:'Mercado',viveres:'Mercado',
+        restaurante:'Restaurante',almuerzo:'Restaurante',cena:'Restaurante',comida:'Restaurante',desayuno:'Restaurante',cafe:'Restaurante',
+        transporte:'Transporte',uber:'Transporte',taxi:'Transporte',bus:'Transporte',gasolina:'Transporte',parqueadero:'Transporte',peaje:'Transporte',
+        entretenimiento:'Entretenimiento',cine:'Entretenimiento',netflix:'Entretenimiento',fiesta:'Entretenimiento',bar:'Entretenimiento',concierto:'Entretenimiento',
+        ropa:'Ropa',camisa:'Ropa',pantalon:'Ropa',zapatos:'Ropa',vestido:'Ropa',chaqueta:'Ropa',
+        salud:'Salud',medico:'Salud',farmacia:'Salud',medicina:'Salud',doctor:'Salud',hospital:'Salud',drogueria:'Salud',
+        educacion:'Educación',libro:'Educación',curso:'Educación',universidad:'Educación',clase:'Educación',
+        belleza:'Belleza',peluqueria:'Belleza',salon:'Belleza',corte:'Belleza',unas:'Belleza',maquillaje:'Belleza',
+        mecato:'Mecato',dulce:'Mecato',dulces:'Mecato',snack:'Mecato',papas:'Mecato',galletas:'Mecato',chocolatina:'Mecato',gomitas:'Mecato',chitos:'Mecato',gaseosa:'Mecato',jugo:'Mecato',helado:'Mecato',
+      };
+      let categoria = 'Otro';
+      for (const [key, val] of Object.entries(catMap)) { if (cleaned.includes(key)) { categoria = val; break; } }
+      const desc = cleaned.replace(/gaste|en|pague|compre|por|de|pesos|mil|cop/g, '').replace(/\s+/g, ' ').trim();
+      return { monto, categoria, descripcion: desc || text.replace(/[\d.,]+/g, '').trim() || 'Gasto' };
+    }
+
+    function api(path, options = {}) {
+      const token = localStorage.getItem('finanzas_token');
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      return fetch(path, { ...options, headers }).then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Error del servidor');
+        return data;
+      });
+    }
+
+    // ─── Toggle component ───
+    function Toggle({ on, onChange }) {
+      return (
+        <button onClick={() => onChange(!on)} className={`relative w-11 h-6 rounded-full toggle-track flex-shrink-0 ${on ? 'bg-emerald-500' : 'bg-gray-700'}`}>
+          <div className={`toggle-dot absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow ${on ? 'transform translate-x-5' : ''}`} />
+        </button>
+      );
+    }
+
+    // ─── Charts (dark theme) ───
+    const CHART_DEFAULTS = { color: '#9ca3af', borderColor: '#1f2937' };
+
+    function DoughnutChart({ gastos }) {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+      const grouped = useMemo(() => {
+        const m = {}; CATEGORIAS.forEach(c => m[c] = 0);
+        gastos.forEach(g => { m[g.categoria] = (m[g.categoria] || 0) + g.monto; });
+        return m;
+      }, [gastos]);
+      useEffect(() => {
+        if (!canvasRef.current) return;
+        if (chartRef.current) chartRef.current.destroy();
+        const labels = CATEGORIAS.filter(c => grouped[c] > 0);
+        chartRef.current = new Chart(canvasRef.current, {
+          type: 'doughnut',
+          data: { labels, datasets: [{ data: labels.map(c => grouped[c]), backgroundColor: labels.map(c => CAT_COLORS[CATEGORIAS.indexOf(c)]), borderWidth: 0 }] },
+          options: { responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom', labels: { padding: 10, usePointStyle: true, font: { size: 10 }, color: '#9ca3af' } },
+              tooltip: { backgroundColor: '#1f2937', titleColor: '#f3f4f6', bodyColor: '#d1d5db', borderColor: '#374151', borderWidth: 1,
+                callbacks: { label: ctx => ` ${ctx.label}: ${formatCOP(ctx.raw)}` } } }, cutout: '68%' }
+        });
+        return () => { if (chartRef.current) chartRef.current.destroy(); };
+      }, [grouped]);
+      return <canvas ref={canvasRef} />;
+    }
+
+    function BarChart({ fijos, variables, ahorro }) {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+      useEffect(() => {
+        if (!canvasRef.current) return;
+        if (chartRef.current) chartRef.current.destroy();
+        chartRef.current = new Chart(canvasRef.current, {
+          type: 'bar',
+          data: { labels: ['Fijos', 'Variables', 'Ahorro'],
+            datasets: [{ data: [fijos, variables, ahorro], backgroundColor: ['#6366f1','#f59e0b','#10b981'], borderRadius: 6, barThickness: 36 }] },
+          options: { responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1f2937', titleColor: '#f3f4f6', bodyColor: '#d1d5db', callbacks: { label: ctx => formatCOP(ctx.raw) } } },
+            scales: { y: { beginAtZero: true, ticks: { callback: v => formatCOP(v), color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f2937' } },
+              x: { ticks: { color: '#9ca3af', font: { size: 10 } }, grid: { display: false } } } }
+        });
+        return () => { if (chartRef.current) chartRef.current.destroy(); };
+      }, [fijos, variables, ahorro]);
+      return <canvas ref={canvasRef} />;
+    }
+
+    function ProgressChart({ gastosAcum, presupuesto, dias }) {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+      useEffect(() => {
+        if (!canvasRef.current) return;
+        if (chartRef.current) chartRef.current.destroy();
+        const labels = gastosAcum.map((_, i) => i + 1);
+        const idealLine = gastosAcum.map((_, i) => (presupuesto / (dias || 30)) * (i + 1));
+        chartRef.current = new Chart(canvasRef.current, {
+          type: 'line',
+          data: { labels, datasets: [
+            { label: 'Acumulado', data: gastosAcum, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.08)', fill: true, tension: 0.3, pointRadius: 0 },
+            { label: 'Ideal', data: idealLine, borderColor: '#10b981', borderDash: [5, 3], tension: 0, pointRadius: 0, borderWidth: 1.5 }
+          ]},
+          options: { responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, font: { size: 10 }, color: '#9ca3af' } },
+              tooltip: { backgroundColor: '#1f2937', titleColor: '#f3f4f6', bodyColor: '#d1d5db', callbacks: { label: ctx => `${ctx.dataset.label}: ${formatCOP(ctx.raw)}` } } },
+            scales: { y: { beginAtZero: true, ticks: { callback: v => formatCOP(v), color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f2937' } },
+              x: { ticks: { color: '#6b7280', font: { size: 9 }, maxTicksLimit: 8 }, grid: { display: false } } } }
+        });
+        return () => { if (chartRef.current) chartRef.current.destroy(); };
+      }, [gastosAcum, presupuesto, dias]);
+      return <canvas ref={canvasRef} />;
+    }
+
+    // ─── Login ───
+    function LoginScreen({ onLogin }) {
+      const [username, setUsername] = useState('');
+      const [password, setPassword] = useState('');
+      const [error, setError] = useState('');
+      const [loading, setLoading] = useState(false);
+      const handleSubmit = async (e) => {
+        e.preventDefault(); setError(''); setLoading(true);
+        try {
+          const data = await api('/api/login', { method: 'POST', body: JSON.stringify({ username: username.trim(), password }) });
+          localStorage.setItem('finanzas_token', data.token);
+          onLogin(data.user);
+        } catch (err) { setError(err.message); } finally { setLoading(false); }
+      };
+      return (
+        <div className="min-h-screen flex items-center justify-center p-5" style={{background:'linear-gradient(135deg,#0a0c10 0%,#111827 100%)'}}>
+          <form onSubmit={handleSubmit} className="bg-gray-900 rounded-2xl w-full max-w-sm p-7 fade-in border border-gray-800">
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4 bg-indigo-600/20">
+                <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <h1 className="text-2xl font-bold text-white">Mis Finanzas</h1>
+              <p className="text-gray-500 text-sm mt-1">Ingresa con tu cuenta</p>
+            </div>
+            {error && <div className="mb-4 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm text-center fade-in">{error}</div>}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Usuario</label>
+                <input type="text" value={username} onChange={e => setUsername(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm"
+                  placeholder="tu.usuario" autoFocus required />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Contraseña</label>
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm"
+                  placeholder="••••••••" required />
+              </div>
+            </div>
+            <button type="submit" disabled={loading || !username || !password}
+              className="w-full mt-6 py-3.5 rounded-xl text-white font-semibold bg-indigo-600 hover:bg-indigo-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.98]">
+              {loading ? 'Ingresando...' : 'Ingresar'}
+            </button>
+            <p className="text-center text-xs text-gray-600 mt-6">Contacta al administrador si necesitas una cuenta</p>
+          </form>
+        </div>
+      );
+    }
+
+    // ─── Setup Form ───
+    function SetupForm({ config, onSave, onLogout, userName }) {
+      const now = new Date();
+      const [form, setForm] = useState(config || {
+        mes: now.getMonth(), anio: now.getFullYear(),
+        salario: '', secundario: '', otrosIng: '',
+        arriendo: '', servicios: '', internet: '', transporte: '', seguros: '', cuotas: '',
+        metaTipo: 'porcentaje', metaValor: '10'
+      });
+      const [saving, setSaving] = useState(false);
+      const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+      const totalIngresos = parseMonto(form.salario) + parseMonto(form.secundario) + parseMonto(form.otrosIng);
+      const handleSave = async () => {
+        if (totalIngresos <= 0) return;
+        setSaving(true);
+        try { await onSave({ ...form }); } finally { setSaving(false); }
+      };
+      const inputCls = "w-full px-3 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm";
+      const labelCls = "block text-xs font-medium text-gray-500 mb-1.5";
+
+      return (
+        <div className="min-h-screen p-4 pb-8" style={{background:'#0a0c10'}}>
+          <div className="flex items-center justify-between mb-5">
+            <span className="text-xs text-gray-500">{userName}</span>
+            <button onClick={onLogout} className="px-3 py-1.5 text-xs text-red-400 bg-red-500/10 rounded-lg active:bg-red-500/20">Salir</button>
+          </div>
+          <div className="bg-gray-900 rounded-2xl w-full max-w-lg mx-auto p-6 fade-in border border-gray-800">
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl mb-3 bg-indigo-600/20">
+                <svg className="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </div>
+              <h1 className="text-xl font-bold text-white">Configuración del Mes</h1>
+              <p className="text-gray-500 text-xs mt-1">Información financiera para comenzar</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mb-5">
+              <div>
+                <label className={labelCls}>Mes</label>
+                <select value={form.mes} onChange={e => set('mes', +e.target.value)} className={inputCls}>
+                  {MESES.map((m, i) => <option key={i} value={i}>{m}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className={labelCls}>Año</label>
+                <select value={form.anio} onChange={e => set('anio', +e.target.value)} className={inputCls}>
+                  {[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="mb-5">
+              <h3 className="text-xs font-semibold text-indigo-400 mb-3 uppercase tracking-wider">Ingresos</h3>
+              <div className="space-y-3">
+                {[['salario','Salario principal'],['secundario','Ingreso secundario'],['otrosIng','Otros ingresos']].map(([k,l]) => (
+                  <div key={k}>
+                    <label className={labelCls}>{l}</label>
+                    <input type="text" inputMode="numeric" className={inputCls} placeholder="$0"
+                      value={form[k] ? formatCOP(form[k]) : ''} onChange={e => set(k, parseMonto(e.target.value))} />
+                  </div>
+                ))}
+              </div>
+              {totalIngresos > 0 && <p className="text-xs text-indigo-400 mt-2 font-medium">Total: {formatCOP(totalIngresos)}</p>}
+            </div>
+            <div className="mb-5">
+              <h3 className="text-xs font-semibold text-orange-400 mb-3 uppercase tracking-wider">Gastos Fijos</h3>
+              <div className="grid grid-cols-2 gap-3">
+                {[['arriendo','Arriendo'],['servicios','Servicios'],['internet','Internet'],['transporte','Transporte'],['seguros','Seguros'],['cuotas','Cuotas crédito']].map(([k,l]) => (
+                  <div key={k}>
+                    <label className={labelCls}>{l}</label>
+                    <input type="text" inputMode="numeric" className={inputCls} placeholder="$0"
+                      value={form[k] ? formatCOP(form[k]) : ''} onChange={e => set(k, parseMonto(e.target.value))} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="mb-6">
+              <h3 className="text-xs font-semibold text-emerald-400 mb-3 uppercase tracking-wider">Meta de Ahorro</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Tipo</label>
+                  <select value={form.metaTipo} onChange={e => set('metaTipo', e.target.value)} className={inputCls}>
+                    <option value="porcentaje">% del ingreso</option>
+                    <option value="fijo">Monto fijo</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>{form.metaTipo === 'porcentaje' ? 'Porcentaje (%)' : 'Monto ($)'}</label>
+                  <input type="text" inputMode="numeric" className={inputCls}
+                    placeholder={form.metaTipo === 'porcentaje' ? '10' : '$0'}
+                    value={form.metaTipo === 'fijo' && form.metaValor > 0 ? formatCOP(form.metaValor) : (form.metaTipo === 'porcentaje' ? form.metaValor : '')}
+                    onChange={e => set('metaValor', form.metaTipo === 'fijo' ? parseMonto(e.target.value) : e.target.value.replace(/[^0-9]/g,''))} />
+                </div>
+              </div>
+            </div>
+            <button onClick={handleSave} disabled={totalIngresos <= 0 || saving}
+              className="w-full py-3.5 rounded-xl text-white font-semibold bg-indigo-600 hover:bg-indigo-500 transition-all disabled:opacity-30 active:scale-[0.98]">
+              {saving ? 'Guardando...' : 'Guardar y continuar'}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Main App ───
+    function App() {
+      const [user, setUser] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [view, setView] = useState('setup');
+      const [config, setConfig] = useState(null);
+      const [gastos, setGastos] = useState([]);
+      const [pagosFijos, setPagosFijos] = useState({});
+      const [ingresosExtra, setIngresosExtra] = useState([]);
+      const [ingDesc, setIngDesc] = useState('');
+      const [ingMonto, setIngMonto] = useState('');
+      const [showIngForm, setShowIngForm] = useState(false);
+      const [quickText, setQuickText] = useState('');
+      const [quickMonto, setQuickMonto] = useState('');
+      const [quickCat, setQuickCat] = useState('Otro');
+      const [searchTerm, setSearchTerm] = useState('');
+      const [filterCat, setFilterCat] = useState('Todas');
+      const [selectedMes, setSelectedMes] = useState(new Date().getMonth());
+      const [selectedAnio, setSelectedAnio] = useState(new Date().getFullYear());
+      const [showMenu, setShowMenu] = useState(false);
+
+      useEffect(() => {
+        const token = localStorage.getItem('finanzas_token');
+        if (!token) { setLoading(false); return; }
+        api('/api/me').then(data => setUser(data.user)).catch(() => localStorage.removeItem('finanzas_token')).finally(() => setLoading(false));
+      }, []);
+
+      useEffect(() => {
+        if (!user) return;
+        Promise.all([
+          api(`/api/config/${selectedMes}/${selectedAnio}`),
+          api(`/api/gastos/${selectedMes}/${selectedAnio}`),
+          api(`/api/pagos-fijos/${selectedMes}/${selectedAnio}`),
+          api(`/api/ingresos-extra/${selectedMes}/${selectedAnio}`)
+        ]).then(([cfgData, gastosData, pagosData, ingData]) => {
+          setConfig(cfgData.config);
+          setGastos(gastosData.gastos || []);
+          const pm = {};
+          (pagosData.pagos || []).forEach(p => { pm[p.concepto] = !!p.pagado; });
+          setPagosFijos(pm);
+          setIngresosExtra(ingData.ingresos || []);
+          setView(cfgData.config ? 'dashboard' : 'setup');
+        }).catch(() => {});
+      }, [user, selectedMes, selectedAnio]);
+
+      const handleLogin = useCallback(u => setUser(u), []);
+      const handleLogout = useCallback(() => {
+        localStorage.removeItem('finanzas_token');
+        setUser(null); setConfig(null); setGastos([]); setPagosFijos({}); setIngresosExtra([]); setView('setup');
+      }, []);
+
+      const handleSaveConfig = useCallback(async (form) => {
+        const body = {
+          mes: form.mes, anio: form.anio,
+          salario: parseMonto(form.salario), secundario: parseMonto(form.secundario), otrosIng: parseMonto(form.otrosIng),
+          arriendo: parseMonto(form.arriendo), servicios: parseMonto(form.servicios), internet: parseMonto(form.internet),
+          transporte: parseMonto(form.transporte), seguros: parseMonto(form.seguros), cuotas: parseMonto(form.cuotas),
+          metaTipo: form.metaTipo, metaValor: form.metaValor
+        };
+        const data = await api('/api/config', { method: 'POST', body: JSON.stringify(body) });
+        const cfg = data.config;
+        setConfig({ mes: cfg.mes, anio: cfg.anio, salario: cfg.salario, secundario: cfg.secundario, otrosIng: cfg.otros_ing,
+          arriendo: cfg.arriendo, servicios: cfg.servicios, internet: cfg.internet, transporte: cfg.transporte, seguros: cfg.seguros, cuotas: cfg.cuotas,
+          metaTipo: cfg.meta_tipo, metaValor: cfg.meta_valor });
+        setSelectedMes(cfg.mes); setSelectedAnio(cfg.anio); setView('dashboard');
+      }, []);
+
+      const togglePagoFijo = useCallback(async (concepto) => {
+        const nuevo = !pagosFijos[concepto];
+        setPagosFijos(prev => ({ ...prev, [concepto]: nuevo }));
+        try {
+          await api(`/api/pagos-fijos/${selectedMes}/${selectedAnio}/${concepto}`, { method: 'PUT', body: JSON.stringify({ pagado: nuevo }) });
+        } catch { setPagosFijos(prev => ({ ...prev, [concepto]: !nuevo })); }
+      }, [pagosFijos, selectedMes, selectedAnio]);
+
+      const addIngresoExtra = useCallback(async () => {
+        const desc = ingDesc.trim();
+        const monto = parseMonto(ingMonto);
+        if (!desc || monto <= 0) return;
+        try {
+          const data = await api('/api/ingresos-extra', { method: 'POST',
+            body: JSON.stringify({ mesKey: `${selectedMes}-${selectedAnio}`, fecha: new Date().toISOString(), descripcion: desc, monto }) });
+          setIngresosExtra(prev => [data.ingreso, ...prev]);
+          setIngDesc(''); setIngMonto(''); setShowIngForm(false);
+        } catch {}
+      }, [ingDesc, ingMonto, selectedMes, selectedAnio]);
+
+      const removeIngresoExtra = useCallback(async (id) => {
+        try { await api(`/api/ingresos-extra/${id}`, { method: 'DELETE' }); setIngresosExtra(prev => prev.filter(i => i.id !== id)); } catch {}
+      }, []);
+
+      const addGasto = useCallback(async () => {
+        let desc = quickText.trim(); let monto = parseMonto(quickMonto); let cat = quickCat;
+        if (desc && !monto) { const p = parseNatural(desc); if (p.monto > 0) { monto = p.monto; cat = p.categoria; desc = p.descripcion || desc; } }
+        if (!desc || monto <= 0) return;
+        try {
+          const data = await api('/api/gastos', { method: 'POST',
+            body: JSON.stringify({ mesKey: `${selectedMes}-${selectedAnio}`, fecha: new Date().toISOString(), descripcion: desc, categoria: cat, monto }) });
+          setGastos(prev => [data.gasto, ...prev]);
+          setQuickText(''); setQuickMonto(''); setQuickCat('Otro');
+        } catch {}
+      }, [quickText, quickMonto, quickCat, selectedMes, selectedAnio]);
+
+      const removeGasto = useCallback(async (id) => {
+        try { await api(`/api/gastos/${id}`, { method: 'DELETE' }); setGastos(prev => prev.filter(g => g.id !== id)); } catch {}
+      }, []);
+
+      const nc = useMemo(() => {
+        if (!config) return {};
+        return config.otros_ing !== undefined
+          ? { ...config, otrosIng: config.otros_ing, metaTipo: config.meta_tipo, metaValor: config.meta_valor }
+          : config;
+      }, [config]);
+
+      const ingresoBase = useMemo(() => parseMonto(nc.salario) + parseMonto(nc.secundario) + parseMonto(nc.otrosIng), [nc]);
+      const totalIngresosExtra = useMemo(() => ingresosExtra.reduce((s, i) => s + i.monto, 0), [ingresosExtra]);
+      const totalIngresos = ingresoBase + totalIngresosExtra;
+
+      const fijosPorConcepto = useMemo(() => ({
+        arriendo: parseMonto(nc.arriendo), servicios: parseMonto(nc.servicios), internet: parseMonto(nc.internet),
+        transporte: parseMonto(nc.transporte), seguros: parseMonto(nc.seguros), cuotas: parseMonto(nc.cuotas)
+      }), [nc]);
+
+      const totalFijosPagados = useMemo(() =>
+        Object.entries(fijosPorConcepto).reduce((s, [k, v]) => s + (pagosFijos[k] ? v : 0), 0)
+      , [fijosPorConcepto, pagosFijos]);
+
+      const totalFijosTotal = useMemo(() => Object.values(fijosPorConcepto).reduce((s, v) => s + v, 0), [fijosPorConcepto]);
+      const totalVariables = useMemo(() => gastos.reduce((s, g) => s + g.monto, 0), [gastos]);
+      const totalGastado = totalFijosPagados + totalVariables;
+      const disponible = totalIngresos - totalGastado;
+      const metaAhorro = useMemo(() => nc.metaTipo === 'porcentaje' ? totalIngresos * (parseInt(nc.metaValor) || 0) / 100 : parseMonto(nc.metaValor), [nc, totalIngresos]);
+      const ahorroReal = totalIngresos - totalGastado;
+      const cumpleMeta = ahorroReal >= metaAhorro;
+      const alertaGasto = disponible > 0 && totalGastado >= totalIngresos * 0.8;
+      const diasEnMes = useMemo(() => new Date(selectedAnio, selectedMes + 1, 0).getDate(), [selectedMes, selectedAnio]);
+
+      const gastosAcumulados = useMemo(() => {
+        const byDay = {};
+        gastos.forEach(g => { const d = new Date(g.fecha).getDate(); byDay[d] = (byDay[d] || 0) + g.monto; });
+        let acum = 0; const result = [];
+        const maxDay = Math.max(new Date().getDate(), ...Object.keys(byDay).map(Number), 1);
+        for (let i = 1; i <= Math.min(maxDay, diasEnMes); i++) { acum += (byDay[i] || 0); result.push(acum); }
+        return result.length > 0 ? result : [0];
+      }, [gastos, diasEnMes]);
+
+      const filteredGastos = useMemo(() => {
+        let r = [...gastos];
+        if (filterCat !== 'Todas') r = r.filter(g => g.categoria === filterCat);
+        if (searchTerm) { const t = searchTerm.toLowerCase(); r = r.filter(g => g.descripcion.toLowerCase().includes(t) || g.categoria.toLowerCase().includes(t)); }
+        return r;
+      }, [gastos, filterCat, searchTerm]);
+
+      const exportExcel = useCallback(async () => {
+        try {
+          const data = await api(`/api/export/${selectedAnio}`);
+          const wb = XLSX.utils.book_new();
+          const resumenData = MESES.map((mes, i) => {
+            const cfg = data.configs.find(c => c.mes === i);
+            const gMes = data.gastos.filter(g => g.mes_key === `${i}-${selectedAnio}`);
+            const pagos = data.pagos.filter(p => p.mes === i);
+            const ingBase = cfg ? (cfg.salario + cfg.secundario + cfg.otros_ing) : 0;
+            const ingExtra = (data.ingresosExtra || []).filter(ie => ie.mes_key === `${i}-${selectedAnio}`).reduce((s, ie) => s + ie.monto, 0);
+            const ing = ingBase + ingExtra;
+            const allFij = cfg ? (cfg.arriendo + cfg.servicios + cfg.internet + cfg.transporte + cfg.seguros + cfg.cuotas) : 0;
+            const fijPagados = cfg ? ['arriendo','servicios','internet','transporte','seguros','cuotas'].reduce((s, c) => {
+              const p = pagos.find(px => px.concepto === c);
+              return s + ((p && p.pagado) ? (cfg[c] || 0) : 0);
+            }, 0) : 0;
+            const vari = gMes.reduce((s, g) => s + g.monto, 0);
+            const total = fijPagados + vari; const ahorro = ing - total;
+            const meta = cfg ? (cfg.meta_tipo === 'porcentaje' ? ing * (parseInt(cfg.meta_valor) || 0) / 100 : parseInt(cfg.meta_valor) || 0) : 0;
+            return { Mes: mes, 'Ing. base': ingBase, 'Ing. extra': ingExtra, 'Ingresos total': ing, 'Gastos fijos (total)': allFij, 'Gastos fijos (pagados)': fijPagados, 'Gastos variables': vari, 'Total gastado': total, 'Ahorro real': ahorro, 'Meta': meta, '¿Cumple?': ahorro >= meta ? 'Sí' : 'No' };
+          });
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumenData), 'Resumen');
+          const mesGastos = data.gastos.filter(g => g.mes_key === `${selectedMes}-${selectedAnio}`);
+          const det = mesGastos.map(g => ({ Fecha: new Date(g.fecha).toLocaleDateString('es-CO'), Descripción: g.descripcion, Categoría: g.categoria, Monto: g.monto }));
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(det.length ? det : [{ Fecha: '', Descripción: 'Sin gastos', Categoría: '', Monto: 0 }]), `Detalle ${MESES[selectedMes]}`);
+          const pivot = CATEGORIAS.map(cat => {
+            const row = { Categoría: cat };
+            MESES.forEach((m, i) => { row[m] = data.gastos.filter(g => g.mes_key === `${i}-${selectedAnio}` && g.categoria === cat).reduce((s, g) => s + g.monto, 0); });
+            return row;
+          });
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pivot), 'Por categoría');
+          XLSX.writeFile(wb, `Finanzas_${MESES[selectedMes]}_${selectedAnio}.xlsx`);
+        } catch (err) { console.error(err); }
+      }, [selectedMes, selectedAnio]);
+
+      if (loading) return (
+        <div className="min-h-screen flex items-center justify-center" style={{background:'#0a0c10'}}>
+          <div className="w-8 h-8 border-2 border-gray-700 border-t-indigo-500 rounded-full animate-spin" />
+        </div>
+      );
+
+      if (!user) return <LoginScreen onLogin={handleLogin} />;
+      if (view === 'setup') return <SetupForm config={nc.salario ? nc : null} onSave={handleSaveConfig} onLogout={handleLogout} userName={user.nombre} />;
+
+      const fijosPendientes = Object.entries(fijosPorConcepto).filter(([,v]) => v > 0);
+
+      return (
+        <div className="min-h-screen pb-4" style={{background:'#0a0c10'}}>
+          {/* Header mobile */}
+          <header className="sticky top-0 z-40 px-4 py-3 flex items-center justify-between" style={{background:'linear-gradient(135deg,#111827 0%,#1e293b 100%)', borderBottom:'1px solid #1f2937'}}>
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-indigo-600/20 flex items-center justify-center">
+                <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 10v1" /></svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-white leading-tight">{MESES_CORTO[selectedMes]} {selectedAnio}</p>
+                <p className="text-[10px] text-gray-500">{user.nombre}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button onClick={exportExcel} className="w-9 h-9 rounded-lg bg-gray-800 flex items-center justify-center active:bg-gray-700">
+                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+              </button>
+              <button onClick={() => setView('setup')} className="w-9 h-9 rounded-lg bg-gray-800 flex items-center justify-center active:bg-gray-700">
+                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              </button>
+              <button onClick={handleLogout} className="w-9 h-9 rounded-lg bg-gray-800 flex items-center justify-center active:bg-red-900/40">
+                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+              </button>
+            </div>
+          </header>
+
+          <main className="px-4 pt-4 space-y-4 max-w-lg mx-auto">
+            {/* Alert */}
+            {alertaGasto && (
+              <div className="alert-pulse bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 flex items-center gap-2.5 fade-in">
+                <span className="text-red-400 text-lg">⚠️</span>
+                <p className="text-red-300 text-xs font-medium">Más del 80% del presupuesto usado</p>
+              </div>
+            )}
+
+            {/* Summary cards 2x2 */}
+            <div className="grid grid-cols-2 gap-3 fade-in">
+              <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Ingresos</p>
+                <p className="text-lg font-bold text-indigo-400">{formatCOP(totalIngresos)}</p>
+                {totalIngresosExtra > 0 && <p className="text-[10px] text-gray-600 mt-0.5">Base: {formatCOP(ingresoBase)} + Extra: {formatCOP(totalIngresosExtra)}</p>}
+              </div>
+              <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Gastado</p>
+                <p className="text-lg font-bold text-orange-400">{formatCOP(totalGastado)}</p>
+                <p className="text-[10px] text-gray-600 mt-0.5">Fijos pagados + variables</p>
+              </div>
+              <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Disponible</p>
+                <p className={`text-lg font-bold ${disponible >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatCOP(disponible)}</p>
+              </div>
+              <div className={`rounded-xl p-4 border ${cumpleMeta ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Ahorro</p>
+                <p className={`text-lg font-bold ${cumpleMeta ? 'text-emerald-400' : 'text-red-400'}`}>{formatCOP(ahorroReal)}</p>
+                <p className={`text-[10px] mt-0.5 ${cumpleMeta ? 'text-emerald-600' : 'text-red-600'}`}>Meta: {formatCOP(metaAhorro)}</p>
+              </div>
+            </div>
+
+            {/* Ingresos Extra */}
+            <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden fade-in">
+              <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">💰</span>
+                  <p className="text-xs font-semibold text-gray-300">Ingresos Extra</p>
+                  {totalIngresosExtra > 0 && <span className="text-[10px] text-indigo-400 font-medium">+{formatCOP(totalIngresosExtra)}</span>}
+                </div>
+                <button onClick={() => setShowIngForm(!showIngForm)}
+                  className="w-7 h-7 rounded-lg bg-indigo-600/20 flex items-center justify-center active:bg-indigo-600/30">
+                  <svg className={`w-3.5 h-3.5 text-indigo-400 transition-transform ${showIngForm ? 'rotate-45' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12m6-6H6" />
+                  </svg>
+                </button>
+              </div>
+              {showIngForm && (
+                <div className="px-4 py-3 border-b border-gray-800/50 space-y-2.5 fade-in">
+                  <input type="text" value={ingDesc} onChange={e => setIngDesc(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && addIngresoExtra()}
+                    placeholder='Ej: "Freelance", "Me pagaron deuda"'
+                    className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm" />
+                  <div className="flex gap-2.5">
+                    <input type="text" inputMode="numeric"
+                      value={ingMonto ? formatCOP(ingMonto) : ''} onChange={e => setIngMonto(parseMonto(e.target.value))}
+                      onKeyDown={e => e.key === 'Enter' && addIngresoExtra()}
+                      placeholder="Monto"
+                      className="flex-1 px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm" />
+                    <button onClick={addIngresoExtra}
+                      className="px-5 py-2.5 rounded-xl text-white font-medium bg-indigo-600 active:bg-indigo-500 active:scale-[0.98] text-sm">
+                      Agregar
+                    </button>
+                  </div>
+                </div>
+              )}
+              {ingresosExtra.length > 0 && (
+                <div className="divide-y divide-gray-800/50">
+                  {ingresosExtra.map(i => (
+                    <div key={i.id} className="flex items-center justify-between px-4 py-2.5">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="text-sm">💵</span>
+                        <div className="min-w-0">
+                          <p className="text-sm text-gray-300 font-medium capitalize truncate">{i.descripcion}</p>
+                          <p className="text-[10px] text-gray-600">{new Date(i.fecha).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <p className="text-sm font-bold text-emerald-400">+{formatCOP(i.monto)}</p>
+                        <button onClick={() => removeIngresoExtra(i.id)} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 active:text-red-400 active:bg-red-500/10">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {ingresosExtra.length === 0 && !showIngForm && (
+                <div className="px-4 py-4 text-center">
+                  <p className="text-[10px] text-gray-600">Sin ingresos extra este mes</p>
+                </div>
+              )}
+            </div>
+
+            {/* Fixed expenses toggles */}
+            {fijosPendientes.length > 0 && (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden fade-in">
+                <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+                  <p className="text-xs font-semibold text-gray-300">Gastos Fijos</p>
+                  <p className="text-[10px] text-gray-500">{formatCOP(totalFijosPagados)} / {formatCOP(totalFijosTotal)}</p>
+                </div>
+                <div className="divide-y divide-gray-800/50">
+                  {fijosPendientes.map(([concepto, monto]) => (
+                    <div key={concepto} className="flex items-center justify-between px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg">{FIJOS_ICONS[concepto]}</span>
+                        <div>
+                          <p className={`text-sm font-medium ${pagosFijos[concepto] ? 'text-gray-300' : 'text-gray-500'}`}>{FIJOS_LABELS[concepto]}</p>
+                          <p className={`text-xs ${pagosFijos[concepto] ? 'text-orange-400' : 'text-gray-600'}`}>{formatCOP(monto)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {pagosFijos[concepto] && <span className="text-[10px] text-emerald-500 font-medium">Pagado</span>}
+                        <Toggle on={!!pagosFijos[concepto]} onChange={() => togglePagoFijo(concepto)} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Quick add */}
+            <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 fade-in">
+              <p className="text-xs font-semibold text-gray-300 mb-1">Agregar Gasto</p>
+              <p className="text-[10px] text-gray-600 mb-3">Ej: "gasté 25000 en almuerzo"</p>
+              <div className="space-y-2.5">
+                <input type="text" value={quickText} onChange={e => setQuickText(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && addGasto()}
+                  placeholder="¿Qué compraste?"
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm" />
+                <div className="flex gap-2.5">
+                  <input type="text" inputMode="numeric"
+                    value={quickMonto ? formatCOP(quickMonto) : ''} onChange={e => setQuickMonto(parseMonto(e.target.value))}
+                    onKeyDown={e => e.key === 'Enter' && addGasto()}
+                    placeholder="Monto"
+                    className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm" />
+                  <select value={quickCat} onChange={e => setQuickCat(e.target.value)}
+                    className="flex-1 px-3 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm">
+                    {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <button onClick={addGasto}
+                  className="w-full py-3 rounded-xl text-white font-semibold bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] transition-all text-sm">
+                  Agregar gasto
+                </button>
+              </div>
+            </div>
+
+            {/* Charts stacked */}
+            <div className="space-y-4 fade-in">
+              <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                <p className="text-xs font-semibold text-gray-300 mb-3">Por Categoría</p>
+                <div className="h-56">
+                  {totalVariables > 0 ? <DoughnutChart gastos={gastos} /> : <div className="h-full flex items-center justify-center text-gray-600 text-xs">Sin gastos</div>}
+                </div>
+              </div>
+              <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                <p className="text-xs font-semibold text-gray-300 mb-3">Fijos vs Variables vs Ahorro</p>
+                <div className="h-48">
+                  <BarChart fijos={totalFijosPagados} variables={totalVariables} ahorro={Math.max(ahorroReal, 0)} />
+                </div>
+              </div>
+              <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                <p className="text-xs font-semibold text-gray-300 mb-3">Progreso del Mes</p>
+                <div className="h-48">
+                  <ProgressChart gastosAcum={gastosAcumulados} presupuesto={totalIngresos - totalFijosTotal} dias={diasEnMes} />
+                </div>
+              </div>
+            </div>
+
+            {/* Expense list - card based for mobile */}
+            <div className="fade-in">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-semibold text-gray-300">Gastos ({gastos.length})</p>
+                <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
+                  className="px-2.5 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-[10px] text-gray-400 outline-none">
+                  <option value="Todas">Todas</option>
+                  {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                placeholder="Buscar gastos..."
+                className="w-full px-3 py-2.5 bg-gray-900 border border-gray-800 rounded-xl text-sm text-white placeholder-gray-600 outline-none focus:ring-1 focus:ring-gray-700 mb-3" />
+
+              {filteredGastos.length === 0 ? (
+                <div className="text-center py-10 text-gray-700">
+                  <p className="text-3xl mb-2">📦</p>
+                  <p className="text-xs">No hay gastos registrados</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {filteredGastos.map(g => {
+                    const catIdx = CATEGORIAS.indexOf(g.categoria);
+                    return (
+                      <div key={g.id} className="bg-gray-900 rounded-xl p-3.5 border border-gray-800 flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg flex-shrink-0"
+                          style={{ background: (CAT_COLORS[catIdx] || '#6b7280') + '15' }}>
+                          {CAT_ICONS[catIdx] || '📦'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-200 capitalize truncate">{g.descripcion}</p>
+                          <p className="text-[10px] text-gray-500">{g.categoria} · {new Date(g.fecha).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}</p>
+                        </div>
+                        <div className="text-right flex-shrink-0 flex items-center gap-2">
+                          <p className="text-sm font-bold text-gray-200">{formatCOP(g.monto)}</p>
+                          <button onClick={() => removeGasto(g.id)} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-600 active:text-red-400 active:bg-red-500/10">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <footer className="text-center py-6 text-[10px] text-gray-700">
+              Mis Finanzas Personales
+            </footer>
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
