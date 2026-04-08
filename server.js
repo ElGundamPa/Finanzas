@@ -83,6 +83,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ingresos_extra ON ingresos_extra(usuario_id, mes_key);
 `);
 
+function ensureDefaultAdmin() {
+  const n = db.prepare('SELECT COUNT(*) AS c FROM usuarios').get().c;
+  if (n > 0) return;
+  const username = (process.env.DEFAULT_ADMIN_USER || 'admin').trim().toLowerCase();
+  const password = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
+  const nombre = (process.env.DEFAULT_ADMIN_NOMBRE || 'Administrador').trim() || 'Administrador';
+  const hash = bcrypt.hashSync(password, 10);
+  db.prepare('INSERT INTO usuarios (username, password_hash, nombre, es_admin) VALUES (?,?,?,1)').run(username, hash, nombre);
+  console.log(`  Usuario admin creado: "${username}" (contraseña: variable DEFAULT_ADMIN_PASSWORD o "admin123"). Cámbiala desde Administración.`);
+}
+
+ensureDefaultAdmin();
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -96,11 +109,16 @@ function authMiddleware(req, res, next) {
     const decoded = jwt.verify(header.split(' ')[1], JWT_SECRET);
     const user = db.prepare('SELECT id, username, nombre, es_admin FROM usuarios WHERE id = ?').get(decoded.id);
     if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
-    req.user = user;
+    req.user = { ...user, es_admin: !!user.es_admin };
     next();
   } catch {
     return res.status(401).json({ error: 'Token inválido o expirado' });
   }
+}
+
+function adminMiddleware(req, res, next) {
+  if (!req.user || !req.user.es_admin) return res.status(403).json({ error: 'Solo administradores' });
+  next();
 }
 
 // ─── Auth ───
@@ -112,11 +130,67 @@ app.post('/api/login', (req, res) => {
     return res.status(401).json({ error: 'Credenciales incorrectas' });
   }
   const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
-  res.json({ token, user: { id: user.id, username: user.username, nombre: user.nombre } });
+  res.json({
+    token,
+    user: { id: user.id, username: user.username, nombre: user.nombre, es_admin: !!user.es_admin }
+  });
 });
 
 app.get('/api/me', authMiddleware, (req, res) => {
   res.json({ user: req.user });
+});
+
+// ─── Admin: usuarios ───
+app.get('/api/admin/usuarios', authMiddleware, adminMiddleware, (req, res) => {
+  const rows = db.prepare('SELECT id, username, nombre, es_admin, created_at FROM usuarios ORDER BY id').all();
+  res.json({ usuarios: rows.map(r => ({ ...r, es_admin: !!r.es_admin })) });
+});
+
+app.post('/api/admin/usuarios', authMiddleware, adminMiddleware, (req, res) => {
+  const { username, nombre, password, es_admin } = req.body;
+  if (!username || !nombre || !password) return res.status(400).json({ error: 'Usuario, nombre y contraseña son obligatorios' });
+  const u = String(username).trim().toLowerCase();
+  if (db.prepare('SELECT id FROM usuarios WHERE username = ?').get(u)) return res.status(400).json({ error: 'El usuario ya existe' });
+  const hash = bcrypt.hashSync(String(password), 10);
+  const isAd = es_admin ? 1 : 0;
+  const ins = db.prepare('INSERT INTO usuarios (username, password_hash, nombre, es_admin) VALUES (?,?,?,?)').run(u, hash, nombre, isAd);
+  const row = db.prepare('SELECT id, username, nombre, es_admin, created_at FROM usuarios WHERE id = ?').get(ins.lastInsertRowid);
+  res.json({ usuario: { ...row, es_admin: !!row.es_admin } });
+});
+
+app.put('/api/admin/usuarios/:id', authMiddleware, adminMiddleware, (req, res) => {
+  const id = +req.params.id;
+  const target = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
+  if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+  const { nombre, password, es_admin } = req.body;
+  const newNombre = nombre !== undefined ? nombre : target.nombre;
+  let newHash = target.password_hash;
+  if (password != null && String(password).length > 0) newHash = bcrypt.hashSync(String(password), 10);
+  let newEs = target.es_admin;
+  if (es_admin !== undefined) {
+    const want = es_admin ? 1 : 0;
+    if (target.es_admin && !want) {
+      const admins = db.prepare('SELECT COUNT(*) AS c FROM usuarios WHERE es_admin = 1').get().c;
+      if (admins <= 1) return res.status(400).json({ error: 'Debe existir al menos un administrador' });
+    }
+    newEs = want;
+  }
+  db.prepare('UPDATE usuarios SET nombre = ?, password_hash = ?, es_admin = ? WHERE id = ?').run(newNombre, newHash, newEs, id);
+  const row = db.prepare('SELECT id, username, nombre, es_admin, created_at FROM usuarios WHERE id = ?').get(id);
+  res.json({ usuario: { ...row, es_admin: !!row.es_admin } });
+});
+
+app.delete('/api/admin/usuarios/:id', authMiddleware, adminMiddleware, (req, res) => {
+  const id = +req.params.id;
+  if (id === req.user.id) return res.status(400).json({ error: 'No puedes eliminarte a ti mismo' });
+  const target = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
+  if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (target.es_admin) {
+    const admins = db.prepare('SELECT COUNT(*) AS c FROM usuarios WHERE es_admin = 1').get().c;
+    if (admins <= 1) return res.status(400).json({ error: 'No se puede eliminar el único administrador' });
+  }
+  db.prepare('DELETE FROM usuarios WHERE id = ?').run(id);
+  res.json({ ok: true });
 });
 
 // ─── Config ───
@@ -240,8 +314,7 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n  Servidor de Finanzas corriendo en: http://localhost:${PORT}\n`);
-  const adminExists = db.prepare('SELECT id FROM usuarios WHERE es_admin = 1').get();
-  if (!adminExists) {
-    console.log('  No hay usuarios creados. Usa: node admin.js crear <usuario> <nombre> <clave>\n');
+  if (!process.env.JWT_SECRET) {
+    console.log('  Aviso: define JWT_SECRET en producción para que las sesiones no se invaliden al reiniciar.\n');
   }
 });
